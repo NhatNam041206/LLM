@@ -156,4 +156,16 @@ VAD aggressiveness: 2–3
 * Stream audio & text
 * Avoid running all heavy tasks simultaneously
 
-Author: Nam Nhat
+**🚀 Getting Started**
+
+Test microphone:
+```
+python scripts/test_mic.py
+```
+or
+```
+python scripts/test_mic.py --monitor
+```
+to hear input voice
+
+*Author: Nam Nhat*
