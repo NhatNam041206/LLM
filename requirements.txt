@@ -4,3 +4,4 @@ numpy
 pyaudio
 soxr
 webrtcvad-wheels
+samplerate
