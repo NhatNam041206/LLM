@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 import queue
+import samplerate as sr
 from dataclasses import dataclass
 from typing import Generator, Optional, List, Dict, Any
 
@@ -40,14 +41,16 @@ class MicConfig:
     backend: str = "sounddevice"   # "sounddevice" or "pyaudio"
     dtype: str = "float32"         # "float32" recommended
     queue_maxsize: int = 100       # prevents unbounded memory growth
-
+    device_rate: Optional[int] = None  # if set, use this device sample for resampling to the sample_rate
 
 class MicInput:
     def __init__(self, sample_rate: int = 16000, channels: int = 1, frame_ms: int = 20,
+                 device_rate: Optional[int] = None, #Default device native rate (mostly on PCs)
                  device: Optional[int] = None, backend: str = "sounddevice",
                  dtype: str = "float32", queue_maxsize: int = 100):
         self.cfg = MicConfig(
             sample_rate=sample_rate,
+            device_rate=device_rate,
             channels=channels,
             frame_ms=frame_ms,
             device=device,
@@ -55,6 +58,12 @@ class MicInput:
             dtype=dtype,
             queue_maxsize=queue_maxsize,
         )
+
+        if self.cfg.device_rate is None:
+            # Auto-detect the best rate for the specific device
+            self.cfg.device_rate = self.get_device_native_rate(self.cfg.device)
+            print(f"Auto-detected hardware rate: {self.cfg.device_rate}Hz")
+
         self._frames_per_buffer = int(self.cfg.sample_rate * self.cfg.frame_ms / 1000)
         if self._frames_per_buffer <= 0:
             raise ValueError("frame_ms too small; frames_per_buffer computed <= 0")
@@ -82,6 +91,22 @@ class MicInput:
             if d.get("max_input_channels", 0) > 0:
                 out.append({"index": i, "name": d.get("name"), "max_input_channels": d.get("max_input_channels")})
         return out
+
+    @staticmethod
+    def get_device_native_rate(device_index=None):
+        """
+        Queries the hardware to find its preferred sample rate.
+        If device_index is None, it checks the default input device.
+        """
+        import sounddevice as sd
+        try:
+            # query_devices returns a dictionary of info
+            # We specifically want the 'default_samplerate'
+            device_info = sd.query_devices(device_index, kind='input')
+            return int(device_info['default_samplerate'])
+        except Exception as e:
+            print(f"Warning: Could not detect native rate. Defaulting to 44100. Error: {e}")
+            return 44100
 
     @staticmethod
     def list_input_devices_pyaudio() -> List[Dict[str, Any]]:
@@ -184,44 +209,61 @@ class MicInput:
     # sounddevice backend
     # -----------------------------
     def _start_sounddevice(self) -> None:
-        import sounddevice as sd
+            import sounddevice as sd
+            
+            # 1. Calculate the Ratio
+            # Target (16000) / Input (44100) = ~0.36
+            ratio = self.cfg.sample_rate / self.cfg.device_rate
+            
+            # 2. Initialize Resampler (Stateful)
+            # We create this OUTSIDE the callback so it persists (keeps memory) between chunks.
+            # 'sinc_fastest' is good for real-time; use 'sinc_medium' or 'sinc_best' if CPU allows.
+            resampler = sr.Resampler('sinc_fastest', channels=self.cfg.channels)
+            
+            # 3. Calculate Blocksize for the NATIVE rate
+            # We need to request enough native samples to roughly equal 20ms
+            # Formula: 44100 * 0.020 = 882 samples
+            native_blocksize = int(self.cfg.device_rate * self.cfg.frame_ms / 1000)
 
-        def callback(indata, frames, time_info, status):
-            if not self._running:
-                return
-            if status:
-                # Status can indicate over/under-runs; not fatal but useful for debugging
-                # You can log this elsewhere if needed.
-                pass
+            def callback(indata, frames, time_info, status):
+                if not self._running:
+                    return
+                if status:
+                    print(f"Stream status: {status}")
 
-            # indata: shape (frames, channels) float32 (if dtype float32)
-            arr = np.asarray(indata, dtype=np.float32)
+                # --- THE DOWNSAMPLING LOGIC ---
+                # Process the high-res 'indata' into low-res 'resampled_data'
+                # end_of_input=False is critical to prevent clicks/pops
+                resampled_data = resampler.process(indata, ratio, end_of_input=False)
+                
+                # Conversion to correct format for the queue
+                arr = np.asarray(resampled_data, dtype=np.float32)
 
-            if self.cfg.channels == 1:
-                arr = arr.reshape(-1)  # (frames,)
-
-            # Push to queue without blocking; if full, drop the oldest (keep most recent)
-            try:
-                self._q.put_nowait(arr)
-            except queue.Full:
-                try:
-                    _ = self._q.get_nowait()
-                except queue.Empty:
-                    pass
+                if self.cfg.channels == 1:
+                    # Flatten if mono: (N, 1) -> (N,)
+                    arr = arr.reshape(-1)
+                
+                # --- QUEUE HANDLING ---
+                # Push to queue without blocking; if full, drop the oldest
                 try:
                     self._q.put_nowait(arr)
                 except queue.Full:
-                    pass  # if still full, drop
+                    try:
+                        _ = self._q.get_nowait() # Remove oldest
+                        self._q.put_nowait(arr)  # Add new
+                    except (queue.Empty, queue.Full):
+                        pass 
 
-        self._sd_stream = sd.InputStream(
-            samplerate=self.cfg.sample_rate,
-            channels=self.cfg.channels,
-            dtype=self.cfg.dtype,
-            device=self.cfg.device,
-            blocksize=self._frames_per_buffer,  # ensures frame_ms-sized chunks
-            callback=callback,
-        )
-        self._sd_stream.start()
+            # 4. Open Stream at NATIVE rate (device_rate)
+            self._sd_stream = sd.InputStream(
+                samplerate=self.cfg.device_rate,    # <--- MUST be high rate (e.g. 44100)
+                channels=self.cfg.channels,
+                dtype=self.cfg.dtype,
+                device=self.cfg.device,
+                blocksize=native_blocksize,         # <--- Request native frame size
+                callback=callback,
+            )
+            self._sd_stream.start()
 
     # -----------------------------
     # PyAudio backend
