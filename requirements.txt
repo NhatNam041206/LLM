@@ -1,1 +1,6 @@
 faster_whisper
+sounddevice
+numpy
+pyaudio
+soxr
+webrtcvad-wheels
