@@ -1,17 +1,25 @@
 **🎙️ Local Voice Assistant (STT → LLM → TTS)**
+
 A fully local, real-time voice assistant pipeline that converts speech → text → response → speech, designed to run on affordable hardware (low RAM, optional GPU) with no API keys, no token limits, and full privacy.
 
 **✨ Features**
+
 🔊 Real-time Speech-to-Text (STT) using faster-whisper
+
 🧠 Local LLM inference (1–2B or smaller models)
+
 🗣️ Local Text-to-Speech (TTS) (interruptible)
+
 🎧 Microphone streaming with VAD (Voice Activity Detection)
+
 🔁 Turn-taking & barge-in support
+
 🧩 Modular, extensible architecture
 
 🔒 Fully offline – no cloud, no billing, no telemetry
 
 **🧠 System Overview**
+
 Microphone
    ↓
 Audio Capture & Preprocessing
@@ -32,6 +40,7 @@ Speaker
 *The system supports streaming partial transcripts, final utterance detection, and interrupting TTS when the user speaks.*
 
 **🗂️ Project Structure**
+```
 voice-assistant/
 ├── README.md
 ├── src/
@@ -63,9 +72,10 @@ voice-assistant/
     ├── test_stt.py
     ├── test_llm.py
     └── test_tts.py
-
+```
 **📦 Dependencies**
-Core libraries (already installed)
+Core libraries
+```
 pip install \
   faster-whisper \
   sounddevice \
@@ -73,13 +83,18 @@ pip install \
   numpy \
   soxr \
   webrtcvad-wheels
+```
 
-*Optional (recommended)
+**Optional (recommended)**
+
 torch – if using Silero VAD or certain TTS engines
+
 llama-cpp-python – for local LLM inference
+
 fastapi / websockets – if exposing a service
-*
+
 ***Audio Requirements***
+
 All audio is normalized to:
 * Sample rate: 16,000 Hz
 * Channels: Mono
