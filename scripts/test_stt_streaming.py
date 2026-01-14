@@ -31,10 +31,10 @@ def main():
         rolling_window_sec=8.0,
         infer_interval_ms=400,
 
-        stt_model="small",
+        stt_model="tiny",
         stt_device="cpu",
         stt_compute_type="int8",
-        stt_beam_size=1,
+        stt_beam_size=3,
         stt_language="en",
     )
 
