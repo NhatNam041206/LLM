@@ -1,171 +1,108 @@
 **🎙️ Local Voice Assistant (STT → LLM → TTS)**
 
-A fully local, real-time voice assistant pipeline that converts speech → text → response → speech, designed to run on affordable hardware (low RAM, optional GPU) with no API keys, no token limits, and full privacy.
+A fully local, real-time voice assistant pipeline that converts speech → text → response → speech. It is designed to run on modest hardware (4–8 GB RAM) and keeps all processing offline.
 
-**✨ Features**
+✨ Features
+- Streaming STT with VAD and rolling buffer (`src/stt/streaming_stt.py`)
+- Local LLM inference via `llama-cpp-python` (`src/llm/llm_engine.py`)
+- Local TTS via Piper (`src/tts/tts_engine.py`)
+- Modular components: `audio/`, `stt/`, `llm/`, `tts/`
 
-🔊 Real-time Speech-to-Text (STT) using faster-whisper
-
-🧠 Local LLM inference (1–2B or smaller models)
-
-🗣️ Local Text-to-Speech (TTS) (interruptible)
-
-🎧 Microphone streaming with VAD (Voice Activity Detection)
-
-🔁 Turn-taking & barge-in support
-
-🧩 Modular, extensible architecture
-
-🔒 Fully offline – no cloud, no billing, no telemetry
-
-**🧠 System Overview**
-
-Microphone
-   ↓
-Audio Capture & Preprocessing
-   ↓
-VAD + Streaming Buffer
-   ↓
-STT (faster-whisper, int8)
-   ↓
-Dialogue Manager
-   ↓
-LLM (local small model)
-   ↓
-TTS (local)
-   ↓
-Speaker
-
-
-*The system supports streaming partial transcripts, final utterance detection, and interrupting TTS when the user speaks.*
-
-**🗂️ Project Structure**
+Project layout (key files)
 ```
-voice-assistant/
-├── README.md
-├── src/
-│   ├── main.py
-│   ├── audio/
-│   │   ├── mic_input.py
-│   │   ├── preprocess.py
-│   │   ├── ring_buffer.py
-│   │   └── audio_output.py
-│   ├── stt/
-│   │   ├── vad.py
-│   │   ├── stt_engine.py
-│   │   ├── streaming_stt.py
-│   │   └── text_stabilizer.py
-│   ├── llm/
-│   │   ├── llm_engine.py
-│   │   ├── prompt_manager.py
-│   │   └── memory.py
-│   ├── tts/
-│   │   ├── tts_engine.py
-│   │   └── tts_queue.py
-│   └── utils/
-│       ├── logger.py
-│       └── timing.py
-│
-└── scripts/
-    ├── run_local.py
-    ├── test_mic.py
-    ├── test_stt.py
-    ├── test_llm.py
-    └── test_tts.py
-```
-**📦 Dependencies**
-Core libraries
-```
-pip install \
-  faster-whisper \
-  sounddevice \
-  pyaudio \
-  numpy \
-  soxr \
-  webrtcvad-wheels
+./
+├─ README.md
+├─ src/
+│  ├─ audio/
+│  │  ├─ mic_input.py
+│  │  ├─ frame_aligner.py
+│  │  └─ ring_buffer.py
+│  ├─ stt/
+│  │  ├─ stt_engine.py
+│  │  ├─ streaming_stt.py
+│  │  └─ vad.py
+│  ├─ llm/
+│  │  ├─ llm_engine.py
+│  │  └─ prompt_manager.py
+│  └─ tts/
+│     ├─ tts_engine.py
+│     └─ audio_player.py
+└─ scripts/
+   ├─ test_tts_once.py
+   ├─ test_tts_chatloop.py
+   ├─ test_stt_streaming.py
+   └─ test_llm.py
 ```
 
-**Optional (recommended)**
-
-torch – if using Silero VAD or certain TTS engines
-
-llama-cpp-python – for local LLM inference
-
-fastapi / websockets – if exposing a service
-
-***Audio Requirements***
-
-All audio is normalized to:
-* Sample rate: 16,000 Hz
-* Channels: Mono
-* Frame size: 20–30 ms
-* Format: PCM int16 or float32
-* Resampling is handled automatically using soxr.
-
-**STT Pipeline (Streaming Mode)**
-* Microphone frames captured continuously
-* VAD detects speech activity
-* Rolling buffer (5–10 seconds)
-* STT runs every 200–500 ms during speech
-
-*Emits:*
-
-Partial transcripts (live)
-Final transcript after silence timeout
-Recommended STT settings (low hardware)
-Model: tiny or base
-compute_type="int8"
-
-beam_size=1
-
-VAD aggressiveness: 2–3
-
-**LLM Pipeline**
-* Small local model (≤2B parameters)
-* Short conversational memory (last N turns)
-* Optimized for spoken responses
-* No fine-tuning required for basic conversation
-* Typical usage
-* Triggered only after final STT text
-* Optional token streaming
-* Short, natural replies (voice-friendly)
-
-**TTS Pipeline**
-* Local TTS engine (e.g. Piper or equivalent)
-* Sentence-level chunking
-* Playback queue
-* Immediate stop on barge-in
-* Required TTS features
-* speak(text)
-* stop()
-* is_speaking()
-
-**💻 Hardware Targets**
-
-* Designed to run on:
-
-* 4–8 GB RAM
-
-* CPU-only or low-end GPU
-
-* Laptop / mini-PC / edge device
-
-*Performance tips*
-* Keep LLM context short
-* Use quantized STT models
-* Stream audio & text
-* Avoid running all heavy tasks simultaneously
-
-**🚀 Getting Started**
-
-Test microphone:
+Dependencies
+------------
+Install required packages (core):
+```bash
+pip install -r requirements.txt
 ```
-python scripts/test_mic.py
+If installing manually, the main packages are:
+```bash
+pip install faster-whisper sounddevice numpy soxr webrtcvad-wheels
+pip install llama-cpp-python   # for LLM via llama.cpp bindings
+pip install piper             # if using Piper TTS package
 ```
-or
-```
-python scripts/test_mic.py --monitor
-```
-to hear input voice
 
-*Author: Nam Nhat*
+Notes on optional/OS-specific deps
+- `pyaudio` is optional; `sounddevice` is the primary playback/capture library used here.
+- `torch` is only required for optional components (not used in main flow).
+
+Audio requirements
+------------------
+- Internal standard: 16 kHz, mono, 20 ms frames, float32.
+- STT components expect 16 kHz mono windows; resampling is handled automatically.
+
+Model setup (Important!)
+------------------------
+**Note:** The `models/` folder is **not** published in this repository. You must download the required models manually.
+
+**TTS Model (Piper)**
+- Download from: https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/amy/medium
+- Files needed: `en_US-amy-medium.onnx` and `en_US-amy-medium.onnx.json`
+- Place in: `models/tts/`
+- Usage: Update `model_path` in `scripts/test_tts_once.py` to point to the `.onnx` file
+
+**LLM Model (Llama via llama.cpp)**
+- Download from: https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF/tree/main
+- File needed: `Llama-3.2-1B-Instruct-Q4_K_M.gguf` (or similar GGUF quantization)
+- Place in: `models/llm/` (or any accessible path)
+- Usage: Update `model_path` in LLM config to point to the `.gguf` file
+
+After downloading, your directory should look like:
+```
+./models/
+├─ tts/
+│  ├─ en_US-amy-medium.onnx
+│  └─ en_US-amy-medium.onnx.json
+└─ llm/
+   └─ Llama-3.2-1B-Instruct-Q4_K_M.gguf
+```
+
+Quick start
+-----------
+1. Ensure Python v3.9+ and required packages installed.
+2. Point model paths in `scripts/test_tts_once.py` or other scripts.
+3. Run example scripts:
+```bash
+python scripts/test_tts_once.py      # synth + playback example
+python scripts/test_tts_chatloop.py # interactive TTS loop
+python scripts/test_stt_streaming.py# streaming STT demo
+```
+
+Where to look next
+------------------
+- `src/stt/` — streaming coordinator, VAD, ring buffer
+- `src/llm/` — prompt manager and simple LLM engine (llama.cpp backend)
+- `src/tts/` — Piper TTS wrapper and player
+- `src/tts/instruction_tts.md`, `src/stt/instruction_stt.md`, `src/llm/instruction_llm.md` — human-facing instructions for each subsystem
+
+Troubleshooting
+---------------
+- If audio is silent for TTS: check `model_path` and presence of `.json` config file next to the ONNX model.
+- If STT returns empty transcripts: confirm microphone device, sample rate, and VAD aggressiveness.
+
+Author: Nam Nhat
