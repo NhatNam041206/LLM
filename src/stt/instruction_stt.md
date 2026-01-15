@@ -1,212 +1,75 @@
-# INSTRUCTIONS — STT Process 
+# INSTRUCTIONS — STT Process
 **(Mic Streaming → Partial → Final)**
 
-## Goal
+Goal
+----
+Provide a reliable streaming STT pipeline that emits partial transcripts during speech and a final transcript when an utterance ends.
 
-Build a local STT module that:
+What this repo implements
+-------------------------
+- `STTEngine` — a thin `faster-whisper` wrapper (`src/stt/stt_engine.py`) with `transcribe(audio: np.ndarray) -> str`.
+- `StreamingSTT` — coordinator combining `MicInput`, `FrameAligner`, `WebRTCVAD`, `SpeechSegmenter`, `AudioRingBuffer` and `STTEngine` (`src/stt/streaming_stt.py`).
 
-* Takes live microphone audio
-
-* Uses VAD to detect speech
-
-* Produces partial transcript while speaking (streaming)
-
-* Produces final transcript when the utterance ends (silence timeout)
-
-Available libraries:
-```
-faster_whisper, sounddevice, pyaudio, numpy, soxr, webrtcvad-wheels.
-```
-## Output contract (what STT must provide)
-
-STT module must expose:
-
-* Events / Callbacks
-
-* on_partial(text: str) — streaming updates (can change)
-
-* on_final(text: str) — final text for this utterance (stable)
+Output contract (events)
+------------------------
+- `on_partial(text: str)` — streaming, may change while user speaks
+- `on_final(text: str)` — final stable transcript for the utterance
 
 Controls
+--------
+- `start()`, `stop()`, and `run_forever()` on `StreamingSTT`.
+
+Audio standard
+--------------
+- Sample rate: 16000 Hz
+- Channels: 1 (mono)
+- Frame size: 20 ms
+- Internal dtype: `float32` (convert to `int16` only when VAD requires it)
+
+Key modules and responsibilities
+-------------------------------
+- `audio/mic_input.py` — capture microphone, produce aligned frames (used by `StreamingSTT`).
+- `audio/frame_aligner.py` — assemble incoming chunks into fixed-size frames.
+- `audio/ring_buffer.py` — rolling window of last N seconds (used as STT input window).
+- `stt/vad.py` — `WebRTCVAD` wrapper; expects 20ms frames; set aggressiveness 0–3 (default 2).
+- `stt/segmenter.py` — `SpeechSegmenter` drives utterance boundaries (start/end rules, silence timeout).
+- `stt/stt_engine.py` — `STTEngine` loads Whisper model once and exposes `transcribe(audio)`.
+- `stt/streaming_stt.py` — `StreamingSTTConfig` exposes settings (sample rate, frame_ms, rolling_window_sec, infer_interval_ms, stt model/config, vad params, emit_partials, etc.).
+
+Important runtime behaviors (from `StreamingSTT`)
+----------------------------------------------
+- Microphone frames are aligned into fixed 20ms frames via `FrameAligner`.
+- Each frame is VAD-checked and pushed to the ring buffer.
+- While `segmenter.in_speech` is true, STT runs every `infer_interval_ms` (default 400ms) on the rolling buffer and emits partials.
+- On `SegmentEventType.SPEECH_END`, a final STT pass runs on the rolling buffer and emits `on_final`.
+- `emit_partials` and `suppress_empty` control whether partials/finals are emitted when empty.
+
+Recommended settings for low-resource machines
+---------------------------------------------
+- `rolling_window_sec`: 6–8s
+- `infer_interval_ms`: 300–500ms
+- STT model: `tiny` or `base` with `compute_type='int8'`
+- VAD aggressiveness: 2
+
+Testing and integration
+-----------------------
+- Run `scripts/test_mic.py` to verify microphone capture.
+- Use `StreamingSTT` with simple callbacks to print partials/finals and tune `infer_interval_ms` and `rolling_window_sec`.
+
+Usage example (pseudo)
+-----------------------
 ```
-start()
-stop()
-```
-Orchestrator/LLM/TTS plugs into these events.
+from stt.streaming_stt import StreamingSTT, StreamingSTTConfig
 
-## Required Audio Standard
-All internal processing should use:
-```
-Sample rate: 16000 Hz
-Channels: 1 (mono)
-Frame size: 20 ms (recommended)
-dtype: float32 internally (or int16 if required by VAD)
+def on_partial(t): print('partial:', t)
+def on_final(t): print('final:', t)
+
+cfg = StreamingSTTConfig()
+stt = StreamingSTT(cfg, on_partial=on_partial, on_final=on_final)
+stt.run_forever()
 ```
 
-Purpose:
-
-Whisper-family models expect 16kHz mono; consistent framing makes VAD + timing reliable.
-
-## STT Pipeline Overview
-
-**Flow**
-```
-Mic capture → raw frames
-
-Preprocess → downmix + resample → 16k mono
-
-VAD → speech / silence decisions per frame
-
-Segmenter → decides utterance boundaries
-
-Rolling buffer → keep last N seconds of audio
-
-STT loop → every X ms, transcribe rolling window while in speech
-
-Stabilizer → commit stable prefix (reduce flicker)
-
-Emit on_partial, on_final
-```
-
-## Module Breakdown
-
-1) ```audio/mic_input.py```
-
-**Responsibilities**
-
-* List/select mic device
-* Stream audio frames continuously
-* Provide frames as float32 numpy arrays
-
-**Requirements**
-
-* Use either sounddevice OR pyaudio (pick one, don’t mix)
-* Chunk size should align to FRAME_MS:
-at 16kHz, 20ms = 320 samples
-
-**Test**
-
-* Print RMS/energy each frame so you see voice activity.
-
-2) ```audio/preprocess.py```
-
-**Responsibilities**
-
-Convert any input format to standard 16k mono:
-
-* downmix stereo → mono
-* resample → 16k using soxr
-
-**Test**
-
-* Verify output: shape is (N,), sample rate constant.
-
-3) ```stt/vad.py (WebRTC VAD)```
-
-**Responsibilities**
-* Given 20ms frames, return is_speech: bool
-
-**Requirements**
-
-* WebRTC VAD expects 16-bit PCM bytes
-* Convert float32 → int16 safely
-* Aggressiveness: 0–3 (start with 2)
-
-**Test**
-
-* Print SPEECH / SILENCE live
-
-4) `stt/segmenter` *(can live inside streaming_stt.py)*
-
-**Responsibilities**
-Maintain speech state using VAD outputs:
-
-* in_speech boolean
-* speech_start_time
-* end utterance when silence lasts VAD_SILENCE_MS (e.g., 800ms)
-
-Recommended rules
-
-Start utterance after N consecutive speech frames (e.g., 2–3 frames)
-
-End utterance after silence_ms continuously
-
-Test
-
-Print “START” and “END” boundaries accurately.
-
-5) audio/ring_buffer.py
-
-Responsibilities
-
-Maintain rolling window of last ROLLING_WINDOW_SEC seconds
-
-Support:
-
-append(frame)
-
-get() (returns newest window)
-
-Recommended
-
-6–10 seconds window (start with 8s)
-
-6) stt/stt_engine.py (faster-whisper wrapper)
-
-Responsibilities
-
-Load model once
-
-Provide transcribe(audio_array) returning text
-
-Recommended config (low hardware)
-
-model: tiny (upgrade to base later)
-
-compute_type="int8" (CPU)
-
-beam_size=1
-
-language set if known (helps)
-
-7) stt/text_stabilizer.py
-
-Responsibilities
-Streaming transcripts often “jump”. Stabilizer reduces flicker.
-
-Simple effective method
-
-Keep last partial string
-
-Find longest common prefix (LCP) with new partial
-
-Commit only when stable for k iterations (e.g., 2–3)
-
-At utterance end: output final full text
-
-Test
-
-Partials should update smoothly, not rewrite everything every time.
-
-8) stt/streaming_stt.py (the coordinator)
-
-Responsibilities
-Main STT loop:
-
-Consume preprocessed frames
-
-VAD gate + segmenter
-
-Update ring buffer
-
-Run transcribe every STT_INFER_INTERVAL_MS while in_speech
-
-Emit partials + final
-
-Important
-
-Do NOT transcribe on every frame (too slow)
-
-Run STT on a timer (200–500ms)
-
-Only run while speech detected
+Notes
+-----
+- Keep STT calls rate-limited (do not transcribe every audio frame).
+- Use `ring.get(pad_to_full=False)` to avoid blocking padding of the window when running STT.
