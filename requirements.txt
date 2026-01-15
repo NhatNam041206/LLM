@@ -6,3 +6,5 @@ soxr
 webrtcvad-wheels
 samplerate
 llama-cpp-python
+piper-tts
+scipy
