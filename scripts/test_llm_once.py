@@ -5,7 +5,7 @@ sys.path.append("src")
 from llm.llm_engine import LLMEngine, LLMConfig
 from llm.prompt_manager import PromptManager, PromptConfig
 
-MODEL_PATH = "./models/llama-3.2-1b-instruct-q4_k_m.gguf"
+MODEL_PATH = "./models/llm/llama-3.2-1b-instruct-q4_k_m.gguf"
 
 
 def main():
