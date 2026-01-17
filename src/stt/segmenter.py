@@ -64,7 +64,7 @@ class SegmenterConfig:
     start_trigger_frames: int = 2   # consecutive speech frames to trigger start
     end_silence_ms: int = 800       # silence hangover to trigger end
     min_utterance_ms: int = 200     # discard very short utterances (noise/clicks)
-    max_utterance_ms: int = 30_000  # hard cap to avoid runaway
+    max_utterance_ms: int = 10_000  # hard cap to prevent overly long speeches (10 seconds)
     store_utterance_audio: bool = True
 
 
