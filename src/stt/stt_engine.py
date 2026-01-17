@@ -27,7 +27,7 @@ from faster_whisper import WhisperModel
 
 @dataclass
 class STTEngineConfig:
-    model_size: str = "tiny"        # "tiny", "base", "small", ...
+    model_size: str = "small"        # "tiny", "base", "small", ...
     device: str = "cpu"             # "cpu" or "cuda"
     compute_type: str = "int8"       # "int8", "int8_float16", "float16"
     beam_size: int = 1
@@ -110,7 +110,7 @@ class STTEngine:
 # -----------------------------
 if __name__ == "__main__":
     cfg = STTEngineConfig(
-        model_size="tiny",
+        model_size="small",
         device="cpu",
         compute_type="int8",
         beam_size=1,

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
+from collections import deque
 
 import numpy as np
 
@@ -73,6 +74,7 @@ class WebRTCVAD:
         sample_rate: int = 16000,
         frame_ms: int = 20,
         aggressiveness: int = 2,
+        energy_threshold: float = 0.0,  # RMS threshold, 0.0 = disabled
     ):
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(f"Unsupported sample_rate={sample_rate}. Use one of {SUPPORTED_SAMPLE_RATES}.")
@@ -84,13 +86,49 @@ class WebRTCVAD:
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
         self.aggressiveness = aggressiveness
+        self.energy_threshold = energy_threshold
 
         self._vad = webrtcvad.Vad(aggressiveness)
         self._samples_per_frame = int(sample_rate * frame_ms / 1000)
+        
+        # Print configuration for debugging
+        print("\n" + "=" * 60)
+        print("WebRTC VAD Configuration:")
+        print("=" * 60)
+        print(f"  Sample Rate: {self.sample_rate} Hz")
+        print(f"  Frame Size: {self.frame_ms} ms ({self._samples_per_frame} samples)")
+        print(f"  Aggressiveness: {self.aggressiveness} (0=least, 3=most sensitive)")
+        print(f"  Energy Threshold: {self.energy_threshold:.6f} RMS")
+        if self.energy_threshold > 0:
+            print(f"    ✓ Noise gate ENABLED - frames below {self.energy_threshold:.6f} will be silenced")
+        else:
+            print(f"    ✗ Noise gate DISABLED (set VAD_ENERGY_THRESHOLD > 0 to enable)")
+        print("=" * 60 + "\n")
 
     @property
     def samples_per_frame(self) -> int:
         return self._samples_per_frame
+    
+    @staticmethod
+    def calculate_rms(frame: np.ndarray) -> float:
+        """
+        Calculate RMS (root mean square) energy of audio frame.
+        
+        Parameters
+        ----------
+        frame: np.ndarray
+            Audio samples (float32 or int16)
+        
+        Returns
+        -------
+        float: RMS value
+        """
+        if frame.dtype == np.int16:
+            frame_f = frame.astype(np.float32) / 32768.0
+        else:
+            frame_f = frame.astype(np.float32)
+        
+        return float(np.sqrt(np.mean(frame_f ** 2)))
 
     def is_speech(self, frame: np.ndarray) -> bool:
         """
@@ -115,6 +153,12 @@ class WebRTCVAD:
                 f"Frame length mismatch: got {frame.size} samples, expected {self._samples_per_frame} "
                 f"for {self.frame_ms}ms at {self.sample_rate}Hz."
             )
+        
+        # Energy gate: if audio too quiet, skip VAD and return silence
+        if self.energy_threshold > 0.0:
+            rms = self.calculate_rms(frame)
+            if rms < self.energy_threshold:
+                return False  # Too quiet, definitely not speech
 
         # Convert to bytes PCM16
         if frame.dtype == np.int16:
@@ -198,8 +242,60 @@ class VADGate:
         return speech_start, speech_end, self.in_speech
 
 
+# -----------------------------# VAD Smoother (Anti-flutter)
 # -----------------------------
-# Quick standalone test
+class VADSmoother:
+    """
+    Smooth VAD decisions using a sliding window majority vote.
+    
+    This prevents "flutter" where VAD rapidly alternates between
+    speech/silence at utterance boundaries due to noise or echo.
+    
+    Parameters
+    ----------
+    window_size : int
+        Number of recent frames to consider for voting.
+        Larger = smoother but more latency.
+        Recommended: 3-7 frames (60-140ms at 20ms/frame)
+    
+    Usage
+    -----
+    smoother = VADSmoother(window_size=5)
+    raw_decision = vad.is_speech(frame)
+    smoothed = smoother.smooth(raw_decision)
+    """
+    
+    def __init__(self, window_size: int = 5):
+        if window_size < 1:
+            raise ValueError("window_size must be >= 1")
+        self.window_size = window_size
+        self.window: deque = deque(maxlen=window_size)
+        
+        # Print configuration
+        print(f"VAD Smoother: window_size={window_size} frames ({window_size * 20}ms smoothing)")
+    
+    def smooth(self, is_speech: bool) -> bool:
+        """
+        Add a new VAD decision and return the smoothed result.
+        
+        Uses majority voting: if more than half the window is speech,
+        return True, else False.
+        """
+        self.window.append(is_speech)
+        
+        if len(self.window) == 0:
+            return is_speech
+        
+        # Majority vote
+        speech_count = sum(self.window)
+        return speech_count >= (len(self.window) / 2)
+    
+    def reset(self):
+        """Clear the smoothing window."""
+        self.window.clear()
+
+
+# -----------------------------# Quick standalone test
 # -----------------------------
 if __name__ == "__main__":
     # This quick test expects you to feed frames externally.
