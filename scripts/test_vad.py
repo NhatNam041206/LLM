@@ -2,6 +2,9 @@
 import sys
 import time
 import numpy as np
+import os
+from pathlib import Path
+from dotenv import load_dotenv
 
 sys.path.append("src")
 
@@ -11,6 +14,10 @@ from stt.segmenter import SpeechSegmenter, SegmenterConfig, SegmentEventType
 from audio.frame_aligner import FrameAligner
 
 def main():
+    # ---- Load .env ----
+    env_path = Path(__file__).parent.parent / ".env"
+    load_dotenv(env_path)
+    
     # ---- Config ----
     sample_rate = 16000
     channels = 1
@@ -18,9 +25,14 @@ def main():
     backend = "sounddevice"     # switch to "pyaudio" if needed
     device = None               # set mic device index if needed
 
-    vad_aggressiveness = 3
-    end_silence_ms = 1500
-    start_trigger_frames = 3
+    # Read VAD config from .env
+    vad_aggressiveness = int(os.getenv("VAD_AGGRESSIVENESS", "1"))
+    vad_energy_threshold = float(os.getenv("VAD_ENERGY_THRESHOLD", "0.0"))
+    vad_smooth_window = int(os.getenv("VAD_SMOOTH_WINDOW", "0"))
+    end_silence_ms = int(os.getenv("VAD_SILENCE_MS", "1500"))
+    start_trigger_frames = int(os.getenv("START_TRIGGER_FRAMES", "8"))
+    min_utterance_ms = int(os.getenv("MIN_UTTERANCE_MS", "300"))
+    max_utterance_ms = int(os.getenv("MAX_UTTERANCE_MS", "10000"))
 
     frame_size = int(sample_rate * frame_ms / 1000)
     aligner = FrameAligner(frame_size)
@@ -37,7 +49,8 @@ def main():
     vad = WebRTCVAD(
         sample_rate=sample_rate,
         frame_ms=frame_ms,
-        aggressiveness=vad_aggressiveness
+        aggressiveness=vad_aggressiveness,
+        energy_threshold=vad_energy_threshold
     )
 
     seg_cfg = SegmenterConfig(
@@ -45,14 +58,24 @@ def main():
         frame_ms=frame_ms,
         start_trigger_frames=start_trigger_frames,
         end_silence_ms=end_silence_ms,
-        min_utterance_ms=200,
+        min_utterance_ms=min_utterance_ms,
+        max_utterance_ms=max_utterance_ms,
         store_utterance_audio=False,  # we only want boundaries here
     )
     segmenter = SpeechSegmenter(seg_cfg)
 
     print("=== VAD Streaming Test ===")
-    print(f"sample_rate={sample_rate}, frame_ms={frame_ms}, vad_aggr={vad_aggressiveness}, end_silence_ms={end_silence_ms}")
-    print("Talk to trigger SPEECH START, stop to trigger SPEECH END.")
+    print(f"Config from .env:")
+    print(f"  sample_rate={sample_rate}, frame_ms={frame_ms}")
+    print(f"  vad_aggressiveness={vad_aggressiveness}")
+    print(f"  vad_energy_threshold={vad_energy_threshold}")
+    print(f"  vad_smooth_window={vad_smooth_window}")
+    print(f"  start_trigger_frames={start_trigger_frames}")
+    print(f"  end_silence_ms={end_silence_ms}")
+    print(f"  min_utterance_ms={min_utterance_ms}")
+    print(f"  max_utterance_ms={max_utterance_ms}")
+    print("\nTalk to trigger SPEECH START, stop to trigger SPEECH END.")
+    print("Utterances longer than {:.1f}s will be automatically cut off.".format(max_utterance_ms / 1000))
     print("Ctrl+C to stop.\n")
 
     mic.start()
