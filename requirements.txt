@@ -1,6 +1,5 @@
 faster_whisper
 sounddevice
-numpy
 pyaudio
 soxr
 webrtcvad-wheels
@@ -8,3 +7,6 @@ samplerate
 llama-cpp-python
 piper-tts
 scipy
+dotenv
+opencv-python>=4.8.0
+numpy
